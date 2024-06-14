@@ -32,3 +32,34 @@ How?
   * "unzip" task unzips, sorts files by size as a heuristic, then creates "recompress" work items of each file, pushes these to the queue
   * "recompress" tasks have a shared atomic counter, so once the last "recompress" task of a book is done, it creates a new task to "rezip" the book.
   * "zip" task compresses the minimized files into a new .epub file and replaces the old one.
+
+
+# commands
+
+```
+oxipng -a -o2 -s -Z -t1
+```
+
+`cargo install minhtml` https://github.com/wilsonzlin/minify-html
+
+DON'T do it, it makes things kaputt :-(
+
+```
+minhtml *.html *.htm *.xml *.css *.xhtml *.ncx
+```
+
+```
+zip -r -9 -X ../zipnew.epub .
+```
+`-X` is important when there are a huge number of files, to make it smaller.
+
+
+
+* lossless
+  * jpegtran -copy none -optimize -progressive -maxmemory 100M -outfile
+  * optipng -fix -clobber -strip all -o{level} -out
+* lossy jpegoptim
+* pngoptim
+*  7z a -mx9 ../y.epub
+*  oxipng, a newer optipng https://github.com/shssoichiro/oxipng
+*  

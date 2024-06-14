@@ -4,3 +4,211 @@
 epuboptim - Optimize/compress EPUB files
 """
 
+import argparse
+import glob
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import tempfile
+import uuid
+
+
+def remove_mobi_when_epub_exists(root):
+    """
+    Searches for .mobi files in a specified directory and its subdirectories (recursively).
+    If an equivalent file with the same name but extension .epub exists, prints the path of
+    the .mobi file and deletes it.
+    """
+    count = 0
+    for mobi in glob.iglob(os.path.join(root, "**/*.mobi"), recursive=True):
+        epub = mobi[:-4] + "epub"
+        if os.path.isfile(epub):
+            count += 1
+            print(mobi)
+            os.remove(mobi)
+    print(f"removed {count} files")
+
+
+def move_epub_without_metadata(root, targetdir):
+    os.makedirs(targetdir, exist_ok=True)
+    for epub in glob.iglob(os.path.join(root, "**/*.epub"), recursive=True):
+        directory, filename = os.path.split(epub)
+        metadatafile = os.path.join(directory, "metadata.opf")
+        if not os.path.isfile(metadatafile):
+            # shutil.move(directory, targetdir)
+            print(directory)
+
+
+OPTIMIZERS = [
+    (
+        r"\.(jpg|jpeg)$",
+        [
+            "jpegtran",
+            "-copy",
+            "none",
+            "-optimize",
+            "-progressive",
+            "-maxmemory",
+            "100M",
+            "-outfile",
+            "TMPFILENAME",
+            "FULLFILENAME",
+        ],
+    ),
+    (
+        r"\.png$",
+        [
+            "oxipng",
+            "--threads",
+            "1",
+            "-q",
+            "-o2",
+            "-a",
+            "-s",
+            "FULLFILENAME",
+        ],
+    ),
+    (
+        r"\.gif$",
+        [
+            "gifsicle",
+            "-O3",
+            "FULLFILENAME",
+            "-o",
+            "FULLFILENAME",
+        ],
+    ),
+    (
+        # remove unnecessary files
+        r"(\.plist|/Thumbs.db|\.suit|~|\.bak|\.psd)$",
+        [
+            "rm",
+            "FULLFILENAME",
+        ],
+    ),
+    (
+        r"\.(css|htm|html|ncx|opf|otf|ttf|xhtml|xml|xpgt|txt|bmp|js|dat|dfont|ttc|json|thmx|woff|svg)$",
+        None,
+    ),
+    (
+        r"/(mimetype|iTunesArtwork|html_split_.*)$",
+        None,
+    ),
+    # anything NOT matched, print automatically.
+]
+
+
+def optimize(tmpdirname, file, optimizers) -> bool:
+    # walk through the patterns to find a match, possibly with a tmp file that needs to be moved back
+    for pattern, cmd in optimizers:
+        if None != pattern.search(file):
+            if None == cmd:
+                # no command, do nothing => we can return immediatelly
+                return True
+
+            # found something! do the processing
+            tmp_file = None
+            replaced_cmd = []
+            for part in cmd:
+                if "FULLFILENAME" == part:
+                    replaced_cmd.append(file)
+                elif "TMPFILENAME" == part:
+                    if not tmp_file:
+                        tmp_file = os.path.join(
+                            tmpdirname, f"{uuid.uuid4().hex}.{Path(file).suffix[1:]}"
+                        )
+                    replaced_cmd.append(tmp_file)
+                else:
+                    replaced_cmd.append(part)
+
+            # now we can run the command
+            subprocess.run(
+                replaced_cmd,
+                encoding="utf-8",
+            )
+
+            # move tmp_file to file if it is smaller
+            if (
+                tmp_file
+                and os.path.isfile(tmp_file)
+                and os.path.getsize(tmp_file) < os.path.getsize(file)
+            ):
+                shutil.move(tmp_file, file)
+
+            # done!
+            return True
+
+    # nothing found :-(
+    return False
+
+
+def epuboptim(epub, optimizers):
+    compiled_optimizers = [
+        (re.compile(t[0], flags=re.IGNORECASE), t[1]) for t in optimizers
+    ]
+
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        # Extract everything into a "book" directory
+        extracted_dir = os.path.join(tmpdirname, "book")
+        os.mkdir(extracted_dir)
+        subprocess.run(
+            [
+                "unzip",
+                "-q",
+                epub,
+                "-d",
+                extracted_dir,
+            ],
+            encoding="utf-8",
+        )
+
+        # fix permissions (necessary if permissions were weird, so we can access everything later)
+        subprocess.run(
+            ["chmod", "-R", "u+rwX,go+rX,go-w", extracted_dir],
+            encoding="utf-8",
+        )
+
+        # recursively process each file
+        for f in glob.iglob(os.path.join(extracted_dir, "**/*"), recursive=True):
+            if not os.path.isfile(f):
+                continue
+            if not optimize(tmpdirname, f, compiled_optimizers):
+                print(
+                    f'unknown file "{os.path.basename(f)}" in "{os.path.abspath(epub)}"'
+                )
+
+        # done optimizing! now compress.
+
+        # subprocess.run(
+        #   ["zip", "-q", "-r", "-9", "-X", "../out.epub", "."], cwd=extracted_dir
+        # )
+        subprocess.run(
+            ["advzip", "-q", "-a", "-3", "../out.epub", "./"],
+            cwd=extracted_dir,
+        )
+
+        epub_new = os.path.join(tmpdirname, "out.epub")
+
+        # finally, show what we've gained
+        original_size = os.path.getsize(epub)
+        new_size = os.path.getsize(epub_new)
+        print(
+            f'{new_size * 100.0 / original_size:5.1f}%{original_size:10} - {new_size:10} = {original_size - new_size:10} saved for "{epub}"'
+        )
+
+        # finally, overwrite the original!
+        shutil.move(epub_new, epub)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("filename")
+    args = parser.parse_args()
+    try:
+        epuboptim(args.filename, OPTIMIZERS)
+    except Exception as e:
+        print(f'Error for "{os.path.abspath(args.filename)}":\n{e}')
