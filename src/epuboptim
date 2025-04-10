@@ -194,8 +194,9 @@ def epuboptim(epub, optimizers):
         # finally, show what we've gained
         original_size = os.path.getsize(epub)
         new_size = os.path.getsize(epub_new)
+        saved = original_size - new_size
         print(
-            f'{new_size * 100.0 / original_size:5.1f}%{original_size:10} - {new_size:10} = {original_size - new_size:10} saved for "{epub}"'
+            f'{saved * 100.0 / original_size:5.1f}%{original_size:10} - {new_size:10} = {saved:10} saved for "{epub}"'
         )
 
         # finally, overwrite the original!
